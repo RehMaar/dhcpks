@@ -18,10 +18,13 @@ struct free_ip_record* free_ip_table = NULL;
 
 static struct free_ip_record* last_available_addr = NULL;
 
+/* It's a range of available addresses. */
 static uint32_t min_available_addr;
 static uint32_t max_available_addr;
 
-static DEFINE_MUTEX( table_mutex );
+/* SYNCOPOWER! */
+static DEFINE_SPINLOCK( table_lock );
+
 
 /* Lease table. */
 
@@ -36,6 +39,7 @@ DESTROY_RECORD_BY_NODE( struct lease_record, lease_record,
 DESTROY_RECORD( struct lease_record, lease_record, uint32_t, cl_ip,
   kfree(cur); 
 )
+/* DEBUG. */
 PRINT_LIST( struct lease_record, lease_record,  "lease table",
   "%x - %x:%x:%x:%x:%x:%x = %d %d\n", tmp->cl_ip,
   tmp->cl_key[0], tmp->cl_ident.key[1],
@@ -45,7 +49,7 @@ PRINT_LIST( struct lease_record, lease_record,  "lease table",
 )
 
 
-FIND_LIST( struct lease_record, lease_record, uint8_t*,
+FIND_LIST( struct lease_record, lease_record, uint8_t*, 
    int i;
    for( i = 0; i < MAX_MAC_ADDR; i++) {
          if( key[i] != tmp->cl_key[i] ) break;
@@ -53,7 +57,7 @@ FIND_LIST( struct lease_record, lease_record, uint8_t*,
    if( i == MAX_MAC_ADDR ) return tmp;
 )
 
-FIND_LIST( struct lease_record, lease_record_by_ip, uint32_t,
+FIND_LIST( struct lease_record, lease_record_by_ip, uint32_t, 
    if( key == tmp->cl_ip ) return tmp;
 )
 
@@ -74,7 +78,7 @@ DESTROY_LIST( struct iptable_record, iptable_record,
    if( tmp->options ) kfree( tmp->options );
    kfree( tmp );
 )
-FIND_LIST( struct iptable_record, iptable_record, uint8_t*,
+FIND_LIST( struct iptable_record, iptable_record, uint8_t*, 
    int i;
    for( i = 0; i < MAX_MAC_ADDR; i++) {
       if( key[i] != tmp->cl_key[i] ) break;
@@ -147,6 +151,13 @@ void destroy_pool( void )
 }
 
 
+uint8_t* get_iptable_options( uint8_t* key ) {
+   struct iptable_record *record =  find_iptable_record( iptable, key );
+   if( record != NULL )
+      return record->options;
+   return NULL;
+}
+
 /*
  * is_available_ip -- check if ip is free.
  * @ip: requested ip.
@@ -155,8 +166,7 @@ void destroy_pool( void )
 bool is_available_ip( uint32_t ip )
 {
    struct lease_record* tmp_lease_record; 
-
-   mutex_lock( &table_mutex );
+   spin_lock( &table_lock);
    if(!last_available_addr) 
       goto ERROR;
 
@@ -186,11 +196,11 @@ bool is_available_ip( uint32_t ip )
    }
 
 ERROR:
-   mutex_unlock( &table_mutex);
+   spin_unlock( &table_lock);
    return false;
 
 SUCCESS:
-   mutex_unlock( &table_mutex);
+   spin_unlock( &table_lock);
    return true;
 }
 
@@ -200,6 +210,8 @@ SUCCESS:
 uint32_t get_free_address( void ) 
 {
    uint32_t tmp = 0;
+   
+   spin_lock( &table_lock);
    if( last_available_addr ) {
    
       tmp = last_available_addr->ip;
@@ -207,8 +219,9 @@ uint32_t get_free_address( void )
                             last_available_addr->next;
    }
    else {
-      /* Run free ip table creator from lease-table. */
+      clean_lease( );
    }
+   spin_unlock( &table_lock);
    print_free_ip_record( last_available_addr );
    return tmp;
 }
@@ -220,6 +233,7 @@ uint32_t get_free_address( void )
  * @lease: requested lease time.
  * @opts: list of requested options.
  * @len: length of the list.
+ * If address is already registered update lease time.
  */
 uint32_t register_ip( struct ip_mac_key* key, uint32_t lease,
                       uint8_t* opts, uint32_t len 
@@ -229,71 +243,58 @@ uint32_t register_ip( struct ip_mac_key* key, uint32_t lease,
       1. find ip in the free_ip_table and delete record.
       2. Add ip-mac & config to iptable.
       3. Add ip-mac & lease to lease_table.
-      4. Return OK if all is good. What can go bad ? 
+      4. Return OK if all is good. What can go bad ? ( Srly? )
    */
    struct timeval cur_time;
-   struct lease_record* record;
-   //struct iptable_record* iptable_record;
-   size_t i;
-
-   if(!destroy_free_ip_record( key->ip, &free_ip_table ))
-      return -1;
-
-   create_lease_record( &record );
-   record->cl_ip = key->ip;
-   record->lease_time = lease;
-
-   do_gettimeofday( &cur_time );
-   record->expire_time = get_opt_val( MAX_LEASE ) + cur_time.tv_sec;
-
-#ifdef DEBUG
-   PRINTINFO( "REGISTER OLD. IP: %x MAX: %x %x %x %x %x %x\n", 
-               key->ip, 
-               key->mac[0],
-               key->mac[1],
-               key->mac[2],
-               key->mac[3],
-               key->mac[4],
-               key->mac[5]);
-#endif
-   memcpy( &(record->cl_mac), key->mac, MAX_MAC_ADDR+sizeof(uint32_t));
-   record->cl_ip = key->ip;
-#ifdef DEBUG
-   PRINTINFO( "REGISTER NEW. IP: %x MAX: %x %x %x %x %x %x\n", 
-               record->cl_ip, 
-               record->cl_mac[0],
-               record->cl_mac[1],
-               record->cl_mac[2],
-               record->cl_mac[3],
-               record->cl_mac[4],
-               record->cl_mac[5]);
-   PRINTINFO( "SOURCE: " );
-   for( i = 0; i < MAX_MAC_ADDR; i++ )
-   {
-      printk( "%x ", key->mac[i] );
-   }
-   printk( " %x\n", key->ip );
+   struct lease_record* lease_record;
    
-   PRINTINFO( "DEST: " );
-   for( i = 0; i < MAX_MAC_ADDR; i++ )
+   struct iptable_record* iptable_record;
+
+   if(( lease_record = find_lease_record_by_ip( lease_table, key->ip)) == NULL)
    {
-      printk( "%x ", record->cl_mac[i] );
-   }
-   printk( " %x\n", record->cl_ip );
-#endif
-   //add_lease_record( &lease_table, record ); 
+      /* 1. */
+      spin_lock( &table_lock);
+         destroy_free_ip_record( key->ip, &free_ip_table );
+      spin_unlock( &table_lock);
+
+   
+      create_lease_record( &lease_record );
+      lease_record->cl_ip = key->ip;
+      lease_record->lease_time = lease;
+
+      do_gettimeofday( &cur_time );
+      lease_record->expire_time = get_opt_val( MAX_LEASE ) + cur_time.tv_sec;
+
+      memcpy( &(lease_record->cl_mac), key->mac, MAX_MAC_ADDR+sizeof(uint32_t));
+      lease_record->cl_ip = key->ip;
+
+      /* 3. */
+      spin_lock( &table_lock);
+         add_lease_record( &lease_table, lease_record ); 
+      spin_unlock( &table_lock);
 #ifdef DEBUG
-   print_lease_record( lease_table );
+      print_lease_record( lease_table );
 #endif
+   
+      create_iptable_record( &iptable_record );
+      iptable_record->opt_len = len;
+      memcpy( iptable_record->options, opts, len);
+      memcpy( &(iptable_record->cl_mac), key->mac, 
+                                 MAX_MAC_ADDR+sizeof(uint32_t));
+      iptable_record->cl_ip = key->ip;
 
-   /* When lease will be fine.
-   create_iptable_record( iptable_record );
-   iptable_record->opt_len = len;
-   memcpy( );
-   */
-
+      spin_lock( &table_lock);
+         add_iptable_record( &iptable, iptable_record );
+      spin_unlock( &table_lock);
+   } 
+   else {
+      do_gettimeofday( &cur_time );
+      lease_record->expire_time = get_opt_val( MAX_LEASE ) + cur_time.tv_sec;
+      lease_record->lease_time = lease;
+   }
    return 0;
 }
+
 /*
  * unregister_ip -- free lease_table and iptable.
  * @ip: ip to free. 
@@ -302,6 +303,7 @@ uint32_t unregister_ip( uint32_t ip )
 {
    struct free_ip_record* record;
    
+   spin_lock( &table_lock);
    destroy_iptable_record( ip, &iptable );
    destroy_lease_record( ip, &lease_table );
    
@@ -309,6 +311,7 @@ uint32_t unregister_ip( uint32_t ip )
    record->ip = ip;
    if( add_free_ip_record( &free_ip_table, record ) < 0 )
       PRINTINFO( "IP is already unregistred: %x", ip );
+   spin_unlock( &table_lock);
 #ifdef DEBUG
    print_lease_record( lease_table );
    print_free_ip_record( free_ip_table );
@@ -322,9 +325,10 @@ uint32_t unregister_ip( uint32_t ip )
  * @ip: bad ip.
  * @mac: mac address of the client. 
  */
-void clear_bad_address( uint32_t ip, uint8_t* mac )
+void clear_bad_address( uint32_t ip )
 {
-    
+   destroy_iptable_record( ip, &iptable );
+   destroy_lease_record( ip, &lease_table );
 }
 
 /*
@@ -332,12 +336,23 @@ void clear_bad_address( uint32_t ip, uint8_t* mac )
  */
 static uint32_t clean_lease( void )
 {
+   struct lease_record *cur_record = lease_table, *tmp; 
+   uint32_t tmp_ip;
+   while( cur_record ) { 
+      tmp = cur_record->next;
+      if( !lease_expire( cur_record->expire_time ) ) {
+         tmp_ip = cur_record->cl_ip;
+         destroy_lease_record_by_node( cur_record, &lease_table);
+      }
+      cur_record = tmp;
+   }
    return 0;
 }
 
 /*
  * lease_expire -- check lease expiration.
  * @lease_time: time to check.
+ * True if not expire ( what a twist! ).
  */
 static bool lease_expire( uint32_t lease_time )
 {

@@ -26,8 +26,6 @@ static char* ip_range_min = NULL;
 static char* ip_range_max = NULL;
 static int default_lease = 0;
 
-module_param( ip_serv,       charp, S_IRUGO );
-module_param( mask,          charp, S_IRUGO );
 module_param( if_name,       charp, S_IRUGO );
 module_param( ip_range_min,  charp, S_IRUGO );
 module_param( ip_range_max,  charp, S_IRUGO );

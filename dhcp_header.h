@@ -12,7 +12,8 @@
 #define DHCP_OPTION_MAX_SIZE        308 /* RFC-2131 page 10 ( 312 - MAGIC). */
 #define DHCP_CHADDR_MAX_SIZE        16
 
-#define DHCP_MAGIC_COOKIE           63538263 
+#define DHCP_MAGIC_COOKIE           0x63538263 
+
 
 /*
  * struct dhcp_header

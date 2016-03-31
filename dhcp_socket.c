@@ -21,6 +21,7 @@
 
 
 /* For header's check sum. */
+
 struct pshdr 
 {
    uint32_t source, dest;
@@ -32,7 +33,6 @@ static void send_client(struct address*, struct dhcp_header*, int );
 static void send_frame( struct address*, struct dhcp_header* );
 static uint16_t check_sum( void*, uint32_t );
 
-//static DEFINE_MUTEX( mutex );
 
 unsigned int inet_addr( char* source )
 {
@@ -207,7 +207,7 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    uint32_t serv_ip = htonl(get_opt_val( IP_SERVER )),
             ifindex = get_opt_val( IF_INDEX );
    
-   uint8_t *datagram, *chksum_pack, rand_ind, 
+   uint8_t *datagram, rand_ind, *chksum_pack, 
            *hwaddr = (uint8_t*)(hw_opt->val),
            ttl = ((uint8_t*)(ttl_opt->val))[0];
 
@@ -225,11 +225,8 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
 
    memset( datagram, 0, frame_len );
    eth = (struct ethhdr*)datagram; 
-   memset( eth, 1, ETHHDR_LEN );
    ip  = (struct iphdr*)( datagram + ETHHDR_LEN );
-   memset( ip, 2, IPHDR_LEN );
    udp = (struct udphdr*)( datagram + ETHHDR_LEN + IPHDR_LEN );
-   memset( udp, 3, UDPHDR_LEN );
 
    memcpy( datagram + ETHHDR_LEN + IPHDR_LEN + UDPHDR_LEN, header,DHCPHDR_LEN);
 
@@ -249,7 +246,6 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
 
    /* Set ethhdr. */
    memcpy( eth->h_source, hwaddr,    MAX_MAC_ADDR );
-   //memset( eth->h_source, 0, MAX_MAC_ADDR);
    memcpy( eth->h_dest,   addr->mac, MAX_MAC_ADDR ); 
    eth->h_proto = htons(ETH_P_IP);
    
@@ -260,7 +256,7 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    ip->ihl      = 5; 
    /* Type Of Service ( quality of service). */
    ip->tos      = 0;
-   ip->tot_len  = frame_len - ETHHDR_LEN;
+   ip->tot_len  = htons(frame_len - ETHHDR_LEN);
    ip->id       = htons(rand_ind);
     /* Frangment offset. */
    ip->frag_off = 0;
@@ -268,11 +264,13 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    ip->protocol = IPPROTO_UDP;
    ip->saddr    = serv_ip;
    ip->daddr    = addr->ip;
-
+   ip->check    = 0;
+  
    memcpy( chksum_pack, (uint8_t*)ip, IPHDR_LEN );
-   ip->check = check_sum( chksum_pack, IPHDR_LEN ); 
+   ip->check =check_sum( chksum_pack, IPHDR_LEN ); 
 
    /* Pseudoheader for a udp's checksum. */
+
    ps.source = serv_ip;
    ps.dest   = addr->ip;
    ps.zero   = 0; 
@@ -282,31 +280,36 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    udp->source = htons( DHCP_SERVER_PORT );
    udp->dest   = htons( addr->port ); 
    udp->len    = htons( UDPHDR_LEN + DHCPHDR_LEN );
-   
+   udp->check  = 0;
+
    memset( chksum_pack, 0, ( PSHDR_LEN+UDPHDR_LEN) );
    memcpy( chksum_pack, &ps,  PSHDR_LEN );
    memcpy( chksum_pack+PSHDR_LEN, udp, UDPHDR_LEN );
-   udp->check = check_sum( chksum_pack, PSHDR_LEN );
+   udp->check = check_sum( chksum_pack, PSHDR_LEN+UDPHDR_LEN );
 
    CREATE_IOV( datagram, frame_len )
    CREATE_MSGHDR( &addr_ll, sizeof(struct sockaddr_ll) )
 
 #ifdef DEBUG
    int i;
+   printk( "Ethernet\n" );
    for( i = 0; i < frame_len; i ++ ) {
       printk( "%d ", datagram[i] );
       if( i % 20 == 0 ) printk( "\n");
+      if( i == ETHHDR_LEN ) printk( "\nIP\n" );
+      else if( i == ETHHDR_LEN + IPHDR_LEN ) 
+            printk( "\nUDP\n");
+      else if( i == ETHHDR_LEN + IPHDR_LEN + UDPHDR_LEN ){
+         printk("\nDHCP\n");
+      }
    }
-   //print_frame( datagram, frame_len );
 #endif
-   
    err = kernel_sendmsg(sock, &msg, &iov, 0, frame_len);
 #ifdef DEBUG
    if( err < 0 ) 
       PRINTALERT( "send message error: %d.\n", -err);
    else
       PRINTINFO( "message send.\n" );
-
 #endif
 
 free:

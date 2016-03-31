@@ -33,10 +33,6 @@ struct work_data_struct {
 
 struct workqueue_struct *queue;
 
-/* TODO: Mutex on other step. */
-/* TODO: RCU_LOCK*/
-static DEFINE_MUTEX( mutex );
-
 
 static void handle_msg( struct work_struct* work )
 {
@@ -52,12 +48,9 @@ static void handle_msg( struct work_struct* work )
 void main_server( void* data  ) 
 {   
    struct socket* sock = NULL;
-   //int ip = 0;
-   //int err, val = 1;
 
    dhcps_set_config( (struct cmdline_params*)data );
    configure_pool( get_opt_val( IP_RANGE_MIN ), get_opt_val( IP_RANGE_MAX ) );
-   
 
    create_socket( &sock );
 

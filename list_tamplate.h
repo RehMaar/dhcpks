@@ -95,7 +95,7 @@ type* find_##list( type* head, typekey key ) {                                \
       FIND                                                                    \
       tmp = tmp->next;                                                        \
    }                                                                          \
-   return NULL;                                                               \
+   return 0;                                                                  \
 }
 
 #define PRINT_LIST( type, list, name, print_str... )                          \

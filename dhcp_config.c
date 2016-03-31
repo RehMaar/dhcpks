@@ -140,6 +140,14 @@ bool dhcps_set_config( struct cmdline_params* param )
       dhcps_options[IF_HWADDR].len = MAX_MAC_ADDR;
       memcpy( dhcps_options[IF_HWADDR].val, hwaddr, MAX_MAC_ADDR );
    }
+   PRINTINFO( "%x:%x:%x:%x:%x:%x %x:%x:%x:%x:%x:%x\n",
+              hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[0],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[1],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[2],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[3],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[4],
+              ((uint8_t*)dhcps_options[IF_HWADDR].val)[5]);
 
    SET_PROP( IF_INDEX, (4), uint32_t )
    SET_VAL( uint32_t, IF_INDEX, 0, ifindex )
@@ -377,9 +385,6 @@ static char* read_config( const char* filename )
    loff_t file_offset = 0; 
    char* buff = NULL;
     
-   mm_segment_t fs = get_fs(); 
-   set_fs( get_ds() ); 
-
    f = filp_open( filename, O_RDONLY, 0 ); 
    if( f < 0 ) 
       goto fail_open; 
@@ -400,8 +405,6 @@ static char* read_config( const char* filename )
 fail: 
     filp_close( f, NULL ); 
 fail_open: 
-    set_fs( fs ); 
-
    return buff;
 }
 
