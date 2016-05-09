@@ -32,13 +32,12 @@ struct lease_record {
       struct ip_mac_key pair; 
       uint8_t key[MAX_MAC_ADDR + sizeof(uint32_t)]; /* 10 byte */
    } cl_ident;
+};
 
 #define cl_mac cl_ident.pair.mac     
 #define cl_ip  cl_ident.pair.ip      
 #define cl_key cl_ident.key  
 
-};
-        
 
 
 struct free_ip_record {
@@ -59,3 +58,7 @@ struct iptable_record* get_iptable_record( uint8_t*);
 
 bool is_available_ip( uint32_t );
 bool is_correct_addr( uint32_t ip );
+
+/* DEBUG */
+void print_tables( void );
+

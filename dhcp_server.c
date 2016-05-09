@@ -49,7 +49,6 @@ static void handle_msg( struct work_struct* work )
 void main_server( void* data  ) 
 {   
    struct socket* sock = NULL;
-   struct dhcp_header* header = NULL;
 
    dhcps_set_config( (struct cmdline_params*)data );
    configure_pool( get_opt_val( IP_RANGE_MIN ), get_opt_val( IP_RANGE_MAX ) );
@@ -63,6 +62,9 @@ void main_server( void* data  )
    {
       struct work_data_struct* cur_work;
 		set_current_state(TASK_INTERRUPTIBLE);
+#ifdef DEBUG
+      print_tables();
+#endif
       cur_work         = KALLOCATE( struct work_data_struct, (1) );
       cur_work->header = KALLOCATE( struct dhcp_header, (1));
 

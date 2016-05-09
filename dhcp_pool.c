@@ -12,7 +12,6 @@
 
 /* Lease table. */
 /* |  Expire time    |  Lease time  |  Identifier ( mac + ip ) |
- * 
  */
 
 CREATE_LIST( struct lease_record, lease_record )
@@ -131,6 +130,14 @@ static DEFINE_SPINLOCK( lock_lease );
 static DEFINE_SPINLOCK( lock_iptable );
 static DEFINE_SPINLOCK( lock_freetable );
 
+#ifdef DEBUG
+void print_tables( void ) 
+{
+   print_free_ip_record( free_ip_table );
+   print_iptable_record( iptable );
+   print_lease_record( lease_table );
+}
+#endif
 /*
  * configure_pool -- create pool.
  * @ip_min: minimum ip address.
@@ -199,26 +206,17 @@ bool is_available_ip( uint32_t ip ) {
     * If lease expire DO SOMETHING!
     */
    struct lease_record* tmp_rec;
-#ifdef DEBUG
-   PRINTINFO( "Available ip:\n" );
-   print_free_ip_record( free_ip_table );
-#endif
    
    if( ip >= max_available_addr || ip <= min_available_addr ) 
       return false;
-#ifdef DEBUG
-   PRINTALERT( "\t189\n" );
-#endif
+   
    if( last_available_addr == NULL ) {
       /* TODO: Update list. If NULL nevertheless, return false. */
-#ifdef DEBUG
-      PRINTINFO("+\tLast available is null\n");
-#endif
+
       clean_lease( );
       return false;
    }
 
-   // TODO: spin_lock
    if(( find_free_ip_record( free_ip_table, ip) != NULL )) {
     
       /* If ip is last in the list last available is next or the first. */
@@ -235,9 +233,7 @@ bool is_available_ip( uint32_t ip ) {
    if( tmp_rec != NULL ) {
       if( lease_expire( tmp_rec->expire_time ) ) {
          struct free_ip_record *tmp_free_rec = NULL ;
-#ifdef DEBUG
-         PRINTINFO("++\tAdd new record to free_ip_table");
-#endif
+
          destroy_lease_record_by_node( tmp_rec, &lease_table );
          create_free_ip_record( &tmp_free_rec );
          tmp_free_rec->ip = ip;
@@ -289,14 +285,11 @@ uint32_t register_ip( struct ip_mac_key* key, uint32_t lease, uint8_t* opts,
       PRINTALERT("Bad address for registration!\n");
       return -1;
    }
-
    lease_record = find_lease_record_by_ip( lease_table, key->ip );
+   iptable_record = find_iptable_record( iptable, key->mac );
    /* Register. */
-   if( opts ) {
+   if( iptable_record == NULL ) {
 
-#ifdef DEBUG
-      PRINTINFO("+\tdestroy free ip table record");
-#endif
       spin_lock(&lock_freetable);
          destroy_free_ip_record( key->ip, &free_ip_table );
       spin_unlock(&lock_freetable);
@@ -319,24 +312,27 @@ uint32_t register_ip( struct ip_mac_key* key, uint32_t lease, uint8_t* opts,
          add_lease_record( &lease_table, lease_record ); 
       spin_unlock(&lock_lease);
       
-      /* Iptable. */
+      /* iptable. */
       create_iptable_record( &iptable_record );
 
-      iptable_record->options = KALLOCATE( uint8_t, opt_len); 
-      iptable_record->opt_len = opt_len;
-
-      memcpy( iptable_record->options, opts, opt_len);
+      if( opts ) {
+         iptable_record->options = KALLOCATE( uint8_t, opt_len); 
+         iptable_record->opt_len = opt_len;
+         memcpy( iptable_record->options, opts, opt_len);
+      } else {
+         iptable_record->opt_len = 0;
+         iptable_record->options = NULL;
+      }
       memcpy( &(iptable_record->cl_mac), key->mac, 
                                  MAX_MAC_ADDR+sizeof(uint32_t));
 
       iptable_record->cl_ip = key->ip;
       spin_lock(&lock_iptable);
-         add_iptable_record( &iptable, iptable_record );
+        if( add_iptable_record( &iptable, iptable_record ) < 0 )
+            PRINTINFO("Address has been already registered.\n");
       spin_unlock(&lock_iptable);
 
-
    } else { /* Update lease. */
-
       if( lease_record == NULL ) {
          PRINTALERT( "No record in lease table for updating!\n" );
          return -1;
@@ -385,7 +381,7 @@ void clear_bad_address( uint32_t ip )
    spin_unlock(&lock_iptable);
    spin_lock(&lock_lease);
       destroy_lease_record( ip, &lease_table );
-   spin_lock(&lock_lease);
+   spin_unlock(&lock_lease);
 }
 
 /*
