@@ -1,4 +1,3 @@
-//#include <linux/netdevice.h>
 #include <linux/if.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
@@ -17,21 +16,11 @@
 #define ETHHDR_LEN   sizeof(struct ethhdr)
 #define UDPHDR_LEN   sizeof(struct udphdr)
 #define DHCPHDR_LEN  sizeof(struct dhcp_header)
-#define PSHDR_LEN    sizeof(struct pshdr)
 
-
-/* For header's check sum. */
-
-struct pshdr 
-{
-   uint32_t source, dest;
-   uint8_t zero, proto;
-   uint16_t length;
-};
 
 static void send_client(struct address*, struct dhcp_header*, int );
 static void send_frame( struct address*, struct dhcp_header* );
-static uint16_t check_sum( void*, uint32_t );
+static uint16_t check_sum( const void*, uint32_t );
 
 
 unsigned int inet_addr( char* source )
@@ -60,14 +49,11 @@ bool recv_msg( struct socket* sock, struct dhcp_header* header )
    CREATE_MSGHDR( &caddr, sizeof( struct sockaddr_in) )
 
    size = kernel_recvmsg(sock, &msg, &iov, 1, len, msg.msg_flags);
-#ifdef DEBUG
-   if( size < 0 )
-   {
+   if( size < 0 ) {
       PRINTALERT( "receive message error: %d.\n", size );
       return false;
    }
    PRINTINFO( "message was received.\n" );
-#endif
    return true;
 }
 
@@ -89,7 +75,7 @@ bool create_socket( struct socket** sock )
                   SO_REUSEADDR, sock_release( *sock ); return false;
    )
    return true;
-}  
+}
 
 /*
  * send_msg -- choose the sending way and send a message at last.
@@ -99,22 +85,23 @@ bool create_socket( struct socket** sock )
 void send_msg( struct address* addr, struct dhcp_header* header )
 {
    uint32_t brd = get_opt_val( IP_BROADCAST );
-   if( addr->ip == brd )
-   {
+   if( addr->ip == brd ) {
       /* Send broadcast. */
+#ifdef DEBUG
       PRINTINFO( "Send Broadcast %x.", addr->ip);
+#endif
       send_client( addr, header, SO_BROADCAST );
-   }
-   else if( addr->ip == 0 )
-   {
+   } else if( addr->ip == 0 ) {
       /* Send to MAC. */
+#ifdef DEBUG
       PRINTINFO( "Send MAC.");
+#endif
       send_frame( addr, header );
-   }
-   else 
-   {
+   } else {
       /* Send to IP. */   
+#ifdef DEBUG
       PRINTINFO( "Send IP: %x.", addr->ip);
+#endif
       send_client( addr, header, SO_REUSEADDR );
    }
 }
@@ -141,7 +128,7 @@ static void send_client( struct address* addr, struct dhcp_header* header,
    int err, val = 1;
 
    csock = KALLOCATE( struct socket, (1));
-   
+
    saddr.sin_addr.s_addr = htonl( INADDR_ANY );
    saddr.sin_family = PF_INET;
    CREATE_SOCKET( err, val, csock, saddr, PF_INET, SOCK_DGRAM, IPPROTO_UDP, 
@@ -158,30 +145,31 @@ static void send_client( struct address* addr, struct dhcp_header* header,
    PRINTINFO( "CLIENT PORT: %d IP: %x\n",  caddr.sin_port, caddr.sin_addr.s_addr); 
 #endif
    size = kernel_sendmsg(csock, &msg, &iov, 0, len);
-#ifdef DEBUG
+
    if( size < 0 )
-      PRINTALERT( "send message error: %d.\n", -size);
+      PRINTALERT( "Send message error: %d.\n", -size);
    else
-      PRINTINFO( "message send.\n" );
-#endif
+      PRINTINFO( "Message send.\n" );
+
 free:
    sock_release( csock );
 }
 
-static uint16_t check_sum( void* packet, uint32_t len ) 
+static uint16_t check_sum( const void* packet, uint32_t len ) 
 {
-   uint32_t left = len, sum = 0;
-   uint16_t *ptr = (uint16_t*)packet;
-   while( left > 1 )
-   {
-      sum += *ptr++; 
-      left -= 2;
+   const uint8_t *addr = packet;
+   uint32_t sum = 0;
+
+   while( len > 1 ) {
+      sum += (uint32_t)(addr[0]*256+addr[1]);
+      addr += 2;
+      len -= 2;
    }
-   if( left == 1 )
-      sum += htons(*(uint8_t*)ptr << 8 );
-   sum = (sum >> 16 ) + ( sum & 0xffff );
-   sum += ( sum >> 16 );
-   return ~sum;
+   if( len == 1 ) 
+      sum += (uint32_t)(*addr*256);
+   sum = (sum>>16)+(sum&0xffff);
+   sum +=(sum >> 16);
+   return (uint16_t)~htons((uint16_t)sum);
 }
 
 /* 
@@ -199,26 +187,21 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    struct ethhdr *eth;
    struct iphdr  *ip;
    struct udphdr *udp;
-   struct pshdr  ps;
 
    struct opt_t *hw_opt  = get_opt( IF_HWADDR ),
                 *ttl_opt = get_opt( DEFAULT_TTL );
 
    uint32_t serv_ip = htonl(get_opt_val( IP_SERVER )),
             ifindex = get_opt_val( IF_INDEX );
-   
+
    uint8_t *datagram, rand_ind, *chksum_pack, 
            *hwaddr = (uint8_t*)(hw_opt->val),
            ttl = ((uint8_t*)(ttl_opt->val))[0];
 
    int err, frame_len;
 
-#ifdef DEBUG
-   PRINTINFO( "INDEX: %x IP: %x TTL: %x ", ifindex, serv_ip, ttl );
-#endif 
-
    frame_len = ETHHDR_LEN + IPHDR_LEN + UDPHDR_LEN + DHCPHDR_LEN;
-   
+
    chksum_pack = KALLOCATE( uint8_t, (frame_len - ETHHDR_LEN));
    sock        = KALLOCATE(struct socket, (1));
    datagram    = KALLOCATE( uint8_t, frame_len );
@@ -230,11 +213,10 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
 
    memcpy( datagram + ETHHDR_LEN + IPHDR_LEN + UDPHDR_LEN, header,DHCPHDR_LEN);
 
-   if((err = sock_create_kern( PF_PACKET, SOCK_RAW,htons(ETH_P_ALL),&sock))<0 )
-   {                                                              
+   if((err = sock_create_kern(PF_PACKET,SOCK_RAW,htons(ETH_P_ALL),&sock))<0) {
       PRINTALERT("cannot create a socket: %d.\n", err ); 
       goto free;
-   } 
+   }
 
    /* Set dest address. */
    memset( &addr_ll, 0, sizeof(struct sockaddr_ll));
@@ -248,12 +230,12 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    memcpy( eth->h_source, hwaddr,    MAX_MAC_ADDR );
    memcpy( eth->h_dest,   addr->mac, MAX_MAC_ADDR ); 
    eth->h_proto = htons(ETH_P_IP);
-   
+
    /* Supposed error.  */
    get_random_bytes( &rand_ind, sizeof(uint8_t));
    ip->version  = 4;
    /* Internet Header Length ( number of 32-bit ). */ 
-   ip->ihl      = 5; 
+   ip->ihl      = IPHDR_LEN>>2; 
    /* Type Of Service ( quality of service). */
    ip->tos      = 0;
    ip->tot_len  = htons(frame_len - ETHHDR_LEN);
@@ -265,54 +247,27 @@ static void send_frame( struct address* addr, struct dhcp_header* header )
    ip->saddr    = serv_ip;
    ip->daddr    = addr->ip;
    ip->check    = 0;
-  
+
    memcpy( chksum_pack, (uint8_t*)ip, IPHDR_LEN );
    ip->check =check_sum( chksum_pack, IPHDR_LEN ); 
-
-   /* Pseudoheader for a udp's checksum. */
-
-   ps.source = serv_ip;
-   ps.dest   = addr->ip;
-   ps.zero   = 0; 
-   ps.proto  = IPPROTO_UDP;
-   ps.length = htons( UDPHDR_LEN + DHCPHDR_LEN );
-
    udp->source = htons( DHCP_SERVER_PORT );
    udp->dest   = htons( addr->port ); 
    udp->len    = htons( UDPHDR_LEN + DHCPHDR_LEN );
    udp->check  = 0;
 
-   memset( chksum_pack, 0, ( PSHDR_LEN+UDPHDR_LEN) );
-   memcpy( chksum_pack, &ps,  PSHDR_LEN );
-   memcpy( chksum_pack+PSHDR_LEN, udp, UDPHDR_LEN );
-   udp->check = check_sum( chksum_pack, PSHDR_LEN+UDPHDR_LEN );
-
    CREATE_IOV( datagram, frame_len )
    CREATE_MSGHDR( &addr_ll, sizeof(struct sockaddr_ll) )
 
-#ifdef DEBUG
-   int i;
-   printk( "Ethernet\n" );
-   for( i = 0; i < frame_len; i ++ ) {
-      printk( "%d ", datagram[i] );
-      if( i % 20 == 0 ) printk( "\n");
-      if( i == ETHHDR_LEN ) printk( "\nIP\n" );
-      else if( i == ETHHDR_LEN + IPHDR_LEN ) 
-            printk( "\nUDP\n");
-      else if( i == ETHHDR_LEN + IPHDR_LEN + UDPHDR_LEN ){
-         printk("\nDHCP\n");
-      }
-   }
-#endif
    err = kernel_sendmsg(sock, &msg, &iov, 0, frame_len);
-#ifdef DEBUG
+
    if( err < 0 ) 
-      PRINTALERT( "send message error: %d.\n", -err);
+      PRINTALERT( "Send message error: %d.\n", -err);
    else
-      PRINTINFO( "message send.\n" );
-#endif
+      PRINTINFO( "Message send.\n" );
+
 
 free:
    sock_release( sock );
    kfree( datagram );
+   kfree( chksum_pack );
 }

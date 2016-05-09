@@ -1,4 +1,4 @@
-#include <linux/module.h> 
+#include <linux/module.h>
 #include <linux/init.h>
 
 #include <linux/slab.h>
@@ -20,6 +20,7 @@
 #else 
    static char* if_name = NULL; 
 #endif
+
 static char* ip_serv = NULL;
 static char* mask = NULL;
 static char* ip_range_min = NULL;
@@ -37,12 +38,9 @@ struct task_struct* thread = NULL;
 
 static int __init start_server( void ) 
 {
-   
-   PRINTINFO( "Loaded.\n" );
    if( if_name != NULL ) {
-      
       params = KALLOCATE( struct cmdline_params, (1));
-      // TODO: strcpy
+      // TODO: strcpy ?
       params->if_name       = if_name;
       params->ip_serv       = ip_serv;
       params->mask          = mask;
@@ -53,7 +51,7 @@ static int __init start_server( void )
       wake_up_process( thread );
    }
    else {
-      PRINTALERT( "interface name is required." );   
+      PRINTALERT( "Interface name is required." );   
    }
    return 0;
 }

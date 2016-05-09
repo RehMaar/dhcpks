@@ -2,9 +2,9 @@ EXTRA_CFLAGS=-Wall
 CURRENT=`uname -r`
 KDIR=/lib/modules/$(CURRENT)/build/
 PWD=$(shell pwd)
-obj-m  := dhcpk.o
+obj-m  := dhcpks.o
 
-dhcpk-objs := dhcp.o dhcp_header.o dhcp_message.o dhcp_config.o \
+dhcpks-objs := dhcp.o dhcp_header.o dhcp_message.o dhcp_config.o \
                dhcp_server.o dhcp_pool.o dhcp_socket.o
 
 all: 

@@ -30,15 +30,13 @@ while((tok = strsep( &string, delim)) && i < dhcps_options[index].len )       \
      SET_VAL(uint8_t, index, i++, (uint8_t)atoi(tok) )                        \
 
 #define SET_PROP( index, count, type )                                        \
-if( dhcps_options[index].val == NULL )                                        \
-{                                                                             \
+if( dhcps_options[index].val == NULL ) {                                      \
     dhcps_options[index].val = KALLOCATE( type,(count));                      \
     dhcps_options[index].len = count;                                         \
 }                                                                             \
 
 #define SET_PROP_IF_DEFINED( index, count, string, DO )                       \
-if(  string )                                                                 \
-{                                                                             \
+if(  string ) {                                                               \
      SET_PROP( index, count, uint8_t )                                        \
      DO                                                                       \
 }
@@ -90,8 +88,7 @@ struct opt_t* get_opt( int index )
  */
 uint32_t get_opt_val( int index )
 {
-   switch( index )
-   {
+   switch( index ) {
       case DEFAULT_TTL:
       case IF_MTU:
       case DEFAULT_LEASE:
@@ -124,8 +121,7 @@ bool dhcps_set_config( struct cmdline_params* param )
    parse_dhcp_config();
    
    read_lock(&dev_base_lock);
-      if(!(dev = dev_get_by_name( &init_net, param->if_name )))
-      {
+      if(!(dev = dev_get_by_name( &init_net, param->if_name ))) {
          PRINTALERT( "cannot access to hardware address." );
          return false; 
       }
@@ -140,6 +136,8 @@ bool dhcps_set_config( struct cmdline_params* param )
       dhcps_options[IF_HWADDR].len = MAX_MAC_ADDR;
       memcpy( dhcps_options[IF_HWADDR].val, hwaddr, MAX_MAC_ADDR );
    }
+
+#ifdef DEBUG
    PRINTINFO( "%x:%x:%x:%x:%x:%x %x:%x:%x:%x:%x:%x\n",
               hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[0],
@@ -148,15 +146,19 @@ bool dhcps_set_config( struct cmdline_params* param )
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[3],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[4],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[5]);
+#endif
 
    SET_PROP( IF_INDEX, (4), uint32_t )
    SET_VAL( uint32_t, IF_INDEX, 0, ifindex )
 
    SET_PROP( IF_MTU, ( 2 ), uint16_t )
    SET_VAL( uint16_t, IF_MTU, 0, mtu )
+
+#ifdef DEBUG
    PRINTINFO( "MTU %d ifindex %d", mtu, ifindex );
-   if( param ) 
-   {
+#endif
+
+   if( param ) {
        char* tok; int i = 0;
        SET_PROP_IF_DEFINED( 
           IP_SERVER, 4, param->ip_serv, 
@@ -248,52 +250,43 @@ static int parse_dhcp_config( void )
       {
          char *subtok, *tok, *stok;
          int index = 0, i = 0, j, count;
-         
+
          subtok = strsep( &token, " ");        
          switch((index= find_index( subtok )))
          {
             case IP_MASK:
             case IP_SERVER:
                      SET_PROP( index, 4, uint8_t )
-                     else
-                     {
-#ifdef DEBUG
-                        PRINTALERT("errors while parsing config.\n");
-#endif
-                        continue;                                                      
+                     else {
+
+                        PRINTALERT("Errors while parsing config.\n");
+                        continue;
                      }
                      subtok = strsep( &token, " ");
                      PARSING_LOOP( index, ".", subtok, tok )     
                      continue;
             case RANGE:
                      for( i = 0, count = 1; token[i] != '\0'; i++) 
-                        if( token[i] == ' ' ) count++;            
+                        if( token[i] == ' ' ) 
+                            count++;
 
                      if( count < 2 ) {
-#ifdef DEBUG
-                        PRINTALERT( "bad range.\n" );
-#endif
+                        PRINTALERT( "Bad IP range.\n" );
                         continue;
-                     }   
-                     
+                     }
+
                      SET_PROP( IP_RANGE_MIN, 4, uint8_t )
-                     else                                                               
-                     {                                                                 
-#ifdef DEBUG
-                        PRINTALERT("bad range.\n");
-#endif
-                        continue;                                                      
+                     else {
+                        PRINTALERT("Bad IP range.\n");
+                        continue;
                      }
                      subtok = strsep( &token, " ");
                      PARSING_LOOP( IP_RANGE_MIN, ".", subtok, tok )
-         
+
                      SET_PROP( IP_RANGE_MAX, 4, uint8_t )
-                     else                                                               
-                     {                                                                 
-#ifdef DEBUG
-                        PRINTALERT("bad range.\n");
-#endif
-                        continue;                                                      
+                     else {
+                        PRINTALERT("Bad IP range.\n");
+                        continue;
                      }
                      subtok = strsep( &token, " ");
                      PARSING_LOOP( IP_RANGE_MAX, ".", subtok, tok )
@@ -301,12 +294,9 @@ static int parse_dhcp_config( void )
             case DEFAULT_TTL:
                      tok = strsep( &token, " " );
                      SET_PROP( DEFAULT_TTL, (1), uint8_t )
-                     else                                                               
-                     {                                                                 
-#ifdef DEBUG
-                        PRINTALERT("errors while parsing config.\n");
-#endif
-                        continue;                                                      
+                     else {
+                        PRINTALERT("Errors while parsing config.\n");
+                        continue;
                      }
                      SET_VAL( uint8_t, DEFAULT_TTL, 0, (uint8_t)atoi(tok) )
                      continue;
@@ -314,20 +304,16 @@ static int parse_dhcp_config( void )
             case MAX_LEASE:
                      tok = strsep( &token, " " );
                      SET_PROP( index, (4), uint8_t )
-                     else                                                               
-                     {                                                                 
-#ifdef DEBUG
-                        PRINTALERT("errors while parsing config.\n");
-#endif
-                        continue;                                                      
+                     else {
+                        PRINTALERT("Errors while parsing config.\n");
+                        continue;
                      }
                      SET_VAL( uint32_t, index, 0, (uint32_t)atoi(tok) )
-                     continue;                                                      
+                     continue;
 
             case OPTIONS:
-                     subtok = strsep( &token, " ");        
-                     switch( atoi(subtok) )
-                     {
+                     subtok = strsep( &token, " ");
+                     switch( atoi(subtok) ) {
                         case DHCP_ROUTER:       
                            index = ROUTER; break;
                         case DHCP_STATIC_ROUTERS:
@@ -348,28 +334,23 @@ static int parse_dhcp_config( void )
                      }
                      for( i = 0, count = 1; token[i] != '\0'; i++) 
                         if( token[i] == ' ' ) count++;
-                     
+
                      SET_PROP( index, 4*count, uint8_t )
-                     else                                                               
-                     {                                                                 
-#ifdef DEBUG
-                        PRINTALERT("errors while parsing config: 3.\n");
-#endif
-                        continue;                                                      
+                     else {
+                        PRINTALERT("Rrrors while parsing config.\n");
+                        continue;
                      }
-         
+
                      i = 0;
-                     while(i < count*4)
-                     {
+                     while(i < count*4) {
                         tok = strsep( &token, " ");
-                        for( j = 0; j < 4; j++)
-                        {
+                        for( j = 0; j < 4; j++) {
                            stok = strsep( &tok, ".");
                            SET_VAL( uint8_t, index, i++, (uint8_t)atoi(stok) )
                         }
                     }
             default:
-                    continue;                                                      
+                    continue;
          }
       }
       kfree( tmp );
@@ -379,32 +360,32 @@ static int parse_dhcp_config( void )
 
 static char* read_config( const char* filename )
 {
-   struct file *f; 
-   size_t n; 
-   uint64_t l; 
-   loff_t file_offset = 0; 
+   struct file *f;
+   size_t n;
+   uint64_t l;
+   loff_t file_offset = 0;
    char* buff = NULL;
-    
-   f = filp_open( filename, O_RDONLY, 0 ); 
-   if( f < 0 ) 
-      goto fail_open; 
 
-    l = vfs_llseek( f, 0L, 2 ); 
-    if( l <= 0 ) 
-      goto fail; 
+   f = filp_open( filename, O_RDONLY, 0 );
+   if( f < 0 )
+      goto fail_open;
+
+    l = vfs_llseek( f, 0L, 2 );
+    if( l <= 0 )
+      goto fail;
 
     buff = KALLOCATE( char, l );
 
-    vfs_llseek( f, 0L, 0 ); 
-    if( ( n = vfs_read( f, buff, l, &file_offset ) ) != l ) { 
+    vfs_llseek( f, 0L, 0 );
+    if( ( n = vfs_read( f, buff, l, &file_offset ) ) != l ) {
         kfree( buff ); buff = NULL;
-        goto fail; 
-    } 
-    buff[ n ] = '\0'; 
+        goto fail;
+    }
+    buff[ n ] = '\0';
 
-fail: 
-    filp_close( f, NULL ); 
-fail_open: 
+fail:
+    filp_close( f, NULL );
+fail_open:
    return buff;
 }
 
@@ -412,20 +393,17 @@ fail_open:
 static void print_opts( void )
 {
    int i, j;
-   for( i = 0; i < MAX_DHCP_OPTS; i++ )
-   {
+   for( i = 0; i < MAX_DHCP_OPTS; i++ ) {
       PRINTINFO( "Field %s: ", dhcps_options[i].name );
-      switch( find_index( dhcps_options[i].name ) ) 
-      {
+      switch( find_index( dhcps_options[i].name ) ) {
          case DEFAULT_LEASE:
          case MAX_LEASE:
             printk( "%d ", ((uint32_t*)dhcps_options[i].val)[0] );
-            break; 
-         default: 
-            for( j = 0; j < dhcps_options[i].len; j++ ) 
-            {
-               if( dhcps_options[i].val ) printk( "%d ", 
-                                   ((uint8_t*)dhcps_options[i].val)[j] );
+            break;
+         default:
+            for( j = 0; j < dhcps_options[i].len; j++ ) {
+               if( dhcps_options[i].val ) 
+                   printk( "%d ", ((uint8_t*)dhcps_options[i].val)[j] );
             }
       }
       printk( "\n");
@@ -440,10 +418,11 @@ static bool  is_digit(char x)
 static int atoi( char *str )
 {
     int res = 0; int i = 0; 
-    if (str == NULL) return 0;
-    for (; str[i] != '\0'; ++i)
-    {
-        if (is_digit(str[i]) == false) return 0; 
+    if (str == NULL) 
+        return 0;
+    for (; str[i] != '\0'; ++i) {
+        if (is_digit(str[i]) == false) 
+            return 0; 
         res = res*10 + str[i] - '0';
     }
     return res;
