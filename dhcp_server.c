@@ -26,6 +26,7 @@
 #define ANY_PORT        0
 #define MAX_BUFFER_SIZE 1024
 
+
 struct work_data_struct {
       struct work_struct work; 
       struct dhcp_header* header;
@@ -48,12 +49,13 @@ static void handle_msg( struct work_struct* work )
 void main_server( void* data  ) 
 {   
    struct socket* sock = NULL;
+   struct dhcp_header* header = NULL;
 
    dhcps_set_config( (struct cmdline_params*)data );
    configure_pool( get_opt_val( IP_RANGE_MIN ), get_opt_val( IP_RANGE_MAX ) );
-
+ 
    create_socket( &sock );
-
+  
    queue = create_workqueue( "queue" );
    
    /* TODO: before exit wait for input message. How to fix? */
@@ -61,10 +63,9 @@ void main_server( void* data  )
    {
       struct work_data_struct* cur_work;
 		set_current_state(TASK_INTERRUPTIBLE);
-      
       cur_work         = KALLOCATE( struct work_data_struct, (1) );
-      cur_work->header = KALLOCATE( struct dhcp_header, (1) );
-  
+      cur_work->header = KALLOCATE( struct dhcp_header, (1));
+
       memset(cur_work->header, 0, sizeof( struct dhcp_header ));
       
       if(!recv_msg( sock, cur_work->header ))
@@ -74,6 +75,7 @@ void main_server( void* data  )
          kfree( cur_work );
          break;
       }
+
       INIT_WORK( &cur_work->work, handle_msg);
       queue_work( queue, &cur_work->work);   
    }
@@ -82,9 +84,9 @@ void main_server( void* data  )
    flush_workqueue( queue );
    destroy_workqueue( queue );
 
-   if( sock ) sock_release( sock );  
+   if( sock ) 
+      sock_release( sock );  
 
    dhcps_destroy_config();
    destroy_pool();
-
 }

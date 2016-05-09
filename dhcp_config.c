@@ -140,6 +140,7 @@ bool dhcps_set_config( struct cmdline_params* param )
       dhcps_options[IF_HWADDR].len = MAX_MAC_ADDR;
       memcpy( dhcps_options[IF_HWADDR].val, hwaddr, MAX_MAC_ADDR );
    }
+#ifdef DEBUG
    PRINTINFO( "%x:%x:%x:%x:%x:%x %x:%x:%x:%x:%x:%x\n",
               hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[0],
@@ -148,7 +149,7 @@ bool dhcps_set_config( struct cmdline_params* param )
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[3],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[4],
               ((uint8_t*)dhcps_options[IF_HWADDR].val)[5]);
-
+#endif
    SET_PROP( IF_INDEX, (4), uint32_t )
    SET_VAL( uint32_t, IF_INDEX, 0, ifindex )
 

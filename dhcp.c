@@ -20,6 +20,7 @@
 #else 
    static char* if_name = NULL; 
 #endif
+
 static char* ip_serv = NULL;
 static char* mask = NULL;
 static char* ip_range_min = NULL;
@@ -37,10 +38,7 @@ struct task_struct* thread = NULL;
 
 static int __init start_server( void ) 
 {
-   
-   PRINTINFO( "Loaded.\n" );
    if( if_name != NULL ) {
-      
       params = KALLOCATE( struct cmdline_params, (1));
       // TODO: strcpy
       params->if_name       = if_name;

@@ -11,7 +11,6 @@
 
 #define ITERATE_OPTIONS( arr, offset, j, SWITCH... )                          \
 for( j = 0; j < DHCP_OPTION_MAX_SIZE; j ++ ) {                                \
-printk( "Option code: %d\n", arr[offset] );                                   \
    switch( arr[offset] ) { SWITCH }                                           \
    offset = offset + arr[offset+1] + 2;                                       \
 }                                                                  
@@ -37,7 +36,7 @@ static uint32_t dhcp_ack( struct dhcp_header*, uint8_t*, uint32_t, uint32_t,
 static uint32_t dhcp_nak( struct dhcp_header* );
 
 static DEFINE_SPINLOCK( lock_table );
-
+static DEFINE_SPINLOCK( lock_config );
 
 /* 
  * dhcp_handle - handle dhcp message
@@ -90,7 +89,8 @@ static void detect_dest(struct dhcp_header* header,
                                struct address* addr, uint32_t type )
 {
    memcpy( addr->mac, header->chaddr, MAX_MAC_ADDR);
-
+   
+   spin_lock(&lock_config);
    if( header->giaddr == 0 && type == DHCPNAK ) {
          addr->ip = get_opt_val( IP_BROADCAST );
          addr->port = DHCP_CLIENT_PORT;
@@ -111,6 +111,7 @@ static void detect_dest(struct dhcp_header* header,
         addr->ip = header->ciaddr;
         addr->port = DHCP_CLIENT_PORT; 
    }
+   spin_unlock(&lock_config);
 }
 
 /*
@@ -127,7 +128,6 @@ static uint32_t dhcp_discover( struct dhcp_header* header )
 
 #ifdef DEBUG
    PRINTINFO( "DHCPDISCOVER\n" );
-   print_dhcp_header( header );
 #endif
    /*
     * Handle options field
@@ -137,7 +137,7 @@ static uint32_t dhcp_discover( struct dhcp_header* header )
       case DHCP_REQUESTED_IP_ADDRESS:
                ip = ARR_TO_NUM( header->options, offset+2);         
 #ifdef DEBUG
-               printk( "Requested IP: %x\n", ip );
+               PRINTINFO( "\tRequested IP: %x\n", ip );
 #endif
                break;
 
@@ -154,26 +154,27 @@ static uint32_t dhcp_discover( struct dhcp_header* header )
                break;          
 
       case DHCP_END:
-               goto exit;
+               goto send;
       default: 
                break;
    )
 
-exit:   
-   /* TODO: Add Locking. */
+send:   
+   /* If no IP requested, choose my own */
    if( ip == -1 ) {
          spin_lock( &lock_table);
-         ip = get_free_address(); 
+            PRINTINFO( "++\tGet free address\n" ); 
+            ip = get_free_address(); 
          spin_unlock( &lock_table);
    }
    else {
-         if( !is_available_ip(ip) )  {
+         if( !is_available_ip(ip) ) {
+            PRINTINFO( "+++\tNot available. Get free address\n" ); 
             spin_lock( &lock_table);
-            ip = get_free_address();
+               ip = get_free_address();
             spin_unlock( &lock_table);
-         }
+          }
    }
-
    dhcp_offer( header, opt, opt_len, ip, lease );
 
    if( opt ) kfree(opt);
@@ -185,15 +186,16 @@ exit:
  * dhcp_request - handle DHCPREQUEST message
  * @header: dhcp header
  * Answer: DHCPACK, DHPCNAK 
- * Doesn't register IP and doesn't set lease.
+ * 
  */
 static uint32_t dhcp_request( struct dhcp_header* header )
 {
    uint32_t tmp_serv_id = -1, tmp_req_ip = -1, opt_len = 0, lease = 0;
-   uint8_t *opt = NULL, *old_opt = NULL;
+   uint8_t *opt = NULL;
    int j, offset = 0;
    struct opt_t* config_opt = NULL;
    struct ip_mac_key key;
+
 #ifdef DEBUG
    PRINTINFO( "DHCPREQUEST\n" );
 #endif
@@ -203,7 +205,7 @@ static uint32_t dhcp_request( struct dhcp_header* header )
       case DHCP_REQUESTED_IP_ADDRESS:
                tmp_req_ip = ARR_TO_NUM( header->options, offset+2);         
 #ifdef DEBUG
-               printk( "Requested IP: %x\n", tmp_req_ip );
+               PRINTINFO( "\tRequested IP: %x\n", tmp_req_ip );
 #endif
                break;
 
@@ -229,63 +231,104 @@ static uint32_t dhcp_request( struct dhcp_header* header )
                break;
    )
 
-handle:   
+handle:
 
-   // SELECTING -- choose options, save it and so on.
-     if(((tmp_req_ip != tmp_serv_id) != -1) && ( header->ciaddr == 0 ))  {
-         if( tmp_serv_id != get_opt_val(IP_SERVER) )
-                return -1;
+   /* SELECTING -- choose options, save it and so on. */
+     if((tmp_req_ip != -1)  && ( header->ciaddr == 0 )){
+#ifdef DEBUG
+         PRINTALERT( "\tSELECTING: req_ip %x serv_ip %x ciaddr %x\n", 
+                                    tmp_req_ip, tmp_serv_id, header->ciaddr );
+#endif
+
+      spin_lock(&lock_config);
+         if( tmp_serv_id != -1 )
+            if( tmp_serv_id != get_opt_val(IP_SERVER) )
+                return 0;
+
+      spin_unlock(&lock_config);
+         if( !is_available_ip(tmp_req_ip) )  {
+            spin_lock(&lock_table);
+               tmp_req_ip = get_free_address();
+            spin_unlock(&lock_table);
+               if( tmp_req_ip == 0 ) {
+                  PRINTALERT("No available addresses.\n" ); 
+                  return -1;
+               }
+         }
+
+         key.ip = tmp_req_ip;
+         memcpy( &key.mac, header->chaddr, sizeof(uint8_t)*MAX_MAC_ADDR);
+
      }
-   // INIT_REBOOT -- return past options if it are still saved. 
+   /* INIT_REBOOT -- return past options if it are still saved. */
      else if( tmp_serv_id == -1 && tmp_req_ip != -1 && header->ciaddr != 0 ){
-         spin_lock( &lock_table);
-         old_opt = get_iptable_options( header->chaddr );                     
-         spin_unlock( &lock_table);
+         struct iptable_record *tmp_rec_iptab;
+#ifdef  DEBUG
+PRINTALERT("\tINIT-REBOOT: req_ip: %x ciaddr: %x\n", tmp_req_ip, 
+                                                      header->ciaddr);
+#endif
+         if( !is_available_ip(tmp_req_ip )) {
+            PRINTALERT( "Address %x is not available.\n", tmp_req_ip );
+            return -1;
+         }
+         if( !is_correct_addr( tmp_req_ip ) ) {
+            dhcp_nak( header );
+            return 0;
+         }
+         
+         if( opt != NULL )
+            kfree( opt );
+
+         spin_lock(&lock_table);
+            tmp_rec_iptab = get_iptable_record( header->chaddr );
+         spin_unlock(&lock_table);
+         if(!tmp_rec_iptab) {
+            PRINTALERT( "No record in iptable for address %x\n", tmp_req_ip );
+            return -1;
+         }
+
+         opt = tmp_rec_iptab->options;
+         opt_len = tmp_rec_iptab->opt_len;
+         
+         key.ip = tmp_req_ip;
+         memcpy( &key.mac, header->chaddr, sizeof(uint8_t)*MAX_MAC_ADDR);
+               
      }
-   // RENEWING -- update lease. 
-     else if((tmp_req_ip == tmp_serv_id) == -1 && header->ciaddr == 0)  {
+   /* RENEWING / REBINDING -- update lease. */
+     else if((tmp_req_ip == tmp_serv_id) == -1 && header->ciaddr != 0)  {
+#ifdef DEBUG
+     PRINTALERT( "\tRENEWING: ciaddr %x\n", header->ciaddr );
+#endif
+         key.ip = header->ciaddr;
+         memcpy( &key.mac, header->chaddr, sizeof(uint8_t)*MAX_MAC_ADDR);
          if( opt != NULL ) {
                kfree( opt );
                opt = NULL;
          }
      }
-   // Ignore otherwise. 
-     else
+   /* Ignore otherwise. */
+     else {
+         print_dhcp_header( header );
+         PRINTALERT( "IGNORE\n" );
          return 0;
-
-     if( tmp_req_ip == -1 ) {
-         if( header->ciaddr != 0 )
-               tmp_req_ip = header->ciaddr;
-         else 
-               return -1;
      }
-
-     if( is_available_ip(tmp_req_ip) )
-              dhcp_nak( header );
-
-      key.ip = tmp_req_ip;
-      memcpy( &key.mac, header->chaddr, sizeof(uint8_t)*MAX_MAC_ADDR);
-
-      if( lease == 0 ) {
+     if( lease == 0 ) {
+       spin_lock(&lock_config);
          config_opt = get_opt( DEFAULT_LEASE );
          lease = ((uint32_t*)config_opt->val)[0];
-      }
+       spin_unlock(&lock_config);
+     }
 
-      if( old_opt != NULL ) {
-         if( opt != NULL ) {
-            kfree( opt );
-            opt = NULL;
-         }
-         opt = old_opt;
-      }
+   spin_lock(&lock_table);
+     register_ip( &key, lease, opt, opt_len );
+   spin_unlock(&lock_table);
 
-      register_ip( &key, lease, opt, opt_len );
-      dhcp_ack( header, opt, opt_len, tmp_req_ip, lease );
+    dhcp_ack( header, opt, opt_len, tmp_req_ip, lease );
 
-      if( opt != NULL ) 
+    if( opt != NULL ) 
               kfree( opt );
 
-      return 0;
+   return 0;
 }
 
 /*
@@ -312,6 +355,7 @@ static uint32_t dhcp_inform( struct dhcp_header* header )
 handle:   
 #ifdef DEBUG
    PRINTINFO( "DHCPINFORM\n" );
+   PRINTINFO( "\tFrom: %x\n", header->ciaddr );
 #endif
    dhcp_ack( header, opt, opt_len, 0, 0 );
    return 0;
@@ -326,14 +370,18 @@ static uint32_t dhcp_release( struct dhcp_header* header )
 {
    uint32_t ip = ntohl(header->ciaddr); /* To little endianness.*/
    uint32_t tmp, offset = 0, j;
-    
-   PRINTINFO( "DHCPRELEASE" );
+
+#ifdef DEBUG
+   PRINTINFO( "DHCPRELEASE\n" );
+#endif
    ITERATE_OPTIONS( header->options, offset, j,
          case DHCP_SERVER_IDENTIFIER:            
                tmp = get_opt_val( IP_SERVER );
                if( tmp != (ARR_TO_NUM(header->options,(offset+2))))
                {
-                     PRINTINFO( "Another choose.\n" );
+#ifdef DEBUG
+                     PRINTINFO( "\tAnother choose.\n" );
+#endif
                      goto exit; 
                }
                break;
@@ -341,7 +389,10 @@ static uint32_t dhcp_release( struct dhcp_header* header )
                break;
    )
 
-   unregister_ip( ip );
+ spin_lock(&lock_table);
+      unregister_ip( ip );
+ spin_unlock(&lock_table);
+   
 exit:
    return 0;
 }
@@ -356,33 +407,37 @@ exit:
 static uint32_t dhcp_decline( struct dhcp_header* header )
 {
    uint32_t tmp_ip = -1, offset = 0, tmp, j;
-
+#ifdef DEBUG
    PRINTINFO( "DHCPDECLINE" );
+#endif
    ITERATE_OPTIONS( header->options, offset, j,
          case DHCP_SERVER_IDENTIFIER:            
                tmp = get_opt_val( IP_SERVER );
-               if(tmp != (ARR_TO_NUM(header->options,(offset+2))))
-               {
-                     PRINTINFO( "Another choose.\n" );
+               if(tmp != (ARR_TO_NUM(header->options,(offset+2)))) {
+#ifdef  DEBUG
+                     PRINTINFO( "\tAnother choose.\n" );
+#endif
                      goto exit; 
                }
                break;
          case DHCP_REQUESTED_IP_ADDRESS:
                tmp_ip = ARR_TO_NUM( header->options, offset+2);         
 #ifdef DEBUG
-               printk( "Requested IP: %x\n", tmp_ip );
+               PRINTINFO( "\tRequested IP: %x\n", tmp_ip );
 #endif
                break;
          default:
                break;
    )        
-   if( tmp_ip != -1 )
-      clear_bad_address( tmp_ip );        
+   if( tmp_ip != -1 ) {
+    spin_lock(&lock_table);
+         clear_bad_address( tmp_ip );
+    spin_unlock(&lock_table);
+   }
 
 exit:
    return 0;
 }
-
 
 /*
  * dhcp_offer - create repeat DHCPOFFER message
@@ -397,7 +452,9 @@ static uint32_t dhcp_offer( struct dhcp_header* header, uint8_t* opt,
    struct address addr;
    detect_dest( header, &addr, DHCPOFFER );
    if( lease == 0 ) {
-      lease = get_opt_val( DEFAULT_LEASE );
+      spin_lock(&lock_config);
+         lease = get_opt_val( DEFAULT_LEASE );
+      spin_unlock(&lock_config);
    }
 
    /* Set DHCP header for OFFER.*/
@@ -413,8 +470,6 @@ static uint32_t dhcp_offer( struct dhcp_header* header, uint8_t* opt,
 
 #ifdef DEBUG
    PRINTINFO( "DHCPOFFER" );
-   print_dhcp_header( header );
-   //print_dest( &addr );
 #endif
    send_msg( &addr, header );
    return 0;
@@ -438,7 +493,9 @@ static uint32_t dhcp_ack( struct dhcp_header* header, uint8_t* opt,
    if( ip != 0 ) 
    { 
          if( lease == 0 ) {
-               config_opt = get_opt( DEFAULT_LEASE );
+               spin_lock(&lock_config);
+                  config_opt = get_opt( DEFAULT_LEASE );
+               spin_unlock(&lock_config);
                lease = ((uint32_t*)config_opt->val)[0];
          }
    
@@ -446,7 +503,7 @@ static uint32_t dhcp_ack( struct dhcp_header* header, uint8_t* opt,
          header->hops = 0;
          header->secs = 0;
          header->ciaddr = 0;
-         header->yiaddr = ip;
+         header->yiaddr = htonl(ip);
          header->siaddr = 0;
       
          fill_option( header->options, opt, len, lease, DHCPACK);
@@ -462,8 +519,6 @@ static uint32_t dhcp_ack( struct dhcp_header* header, uint8_t* opt,
    }
 #ifdef DEBUG
    PRINTINFO( "DHCPACK" );
-   //print_dhcp_header( header );
-   //print_dest( &addr );
 #endif
    send_msg( &addr, header );
 
@@ -477,6 +532,7 @@ static uint32_t dhcp_ack( struct dhcp_header* header, uint8_t* opt,
 static uint32_t dhcp_nak( struct dhcp_header* header )
 {
    struct address addr;
+   
    detect_dest( header, &addr, DHCPNAK );
  
    header->op = BOOTREPLY;
@@ -490,8 +546,6 @@ static uint32_t dhcp_nak( struct dhcp_header* header )
 
 #ifdef DEBUG
    PRINTINFO("DHCPNAK" );
-   //print_dhcp_header( header );
-   //print_dest( &addr );
 #endif
    send_msg( &addr, header );
    return 0;
@@ -530,14 +584,8 @@ static void fill_option( uint8_t* options, uint8_t* list_opt, uint32_t opt_len,
       offset = 9;
       if( list_opt )
       {
-   #ifdef DEBUG
-            PRINTINFO( "params list with length %d:\n", opt_len );
-   #endif
              for( i = 0 ; i < opt_len ; i++ )
              {
-   #ifdef DEBUG
-                  printk( "%d ", list_opt[i]);
-   #endif
                   switch( list_opt[i] )
                   {
                         case DHCP_SUBNET_MASK:
